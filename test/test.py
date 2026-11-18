@@ -54,7 +54,7 @@ async def test_project(dut):
 
     # Line 2's pixels, from its pixel 0, 144 cycles after line 1's hsync starts. At reset, the nearest ring's
     # opening is centered, with a radius of about 200 pixels, so the top lines show its wall (white), with the
-    # (empty) depth meter (light gray) at x 16-31.
+    # (empty) depth meter (light gray) at x 0-15.
     await cycles_until(1)
     await cycles_until(0)
     await ClockCycles(dut.clk, 144)
@@ -62,5 +62,5 @@ async def test_project(dut):
     for x in range(640):
         pixels.append(color(dut))
         await ClockCycles(dut.clk, 1)
-    assert all(c == (2, 2, 2) for c in pixels[16:32]), f"depth meter: {pixels[16:32]}"
-    assert all(c == (3, 3, 3) for c in pixels[32:640]), f"wall: {set(pixels[32:640])}"
+    assert all(c == (2, 2, 2) for c in pixels[0:16]), f"depth meter: {pixels[0:16]}"
+    assert all(c == (3, 3, 3) for c in pixels[16:640]), f"wall: {set(pixels[16:640])}"

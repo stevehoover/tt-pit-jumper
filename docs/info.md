@@ -11,16 +11,17 @@ You can also include images in this folder and reference them in the markdown. E
 
 Pit Jumper is a VGA game, written in TL-Verilog in Makerchip. You parachute down an endless pit, viewed from
 above (from your own perspective). The pit's walls are a never-ending series of circular openings, drawn in
-perspective, that grow and lighten as you fall past them. The pit meanders; steer with the D-pad to stay
-within it. Passing an opening outside its edge ends the game (the pit turns red). The depth meter on the left
-counts the openings passed; each 512 is a level (blue, green, yellow, then magenta), and each level falls faster.
+perspective, that grow and lighten as you fall past them. The pit twists; steer with the D-pad to stay
+within it. Passing an opening outside its edge ends the game (the pit turns red). The depth meter at the left
+edge counts the openings passed; each 512 is a level (blue, green, yellow, then magenta), and each level falls
+faster.
 
 ![Pit Jumper](pit_jumper.png)
 
-It draws a 640x480 picture at 60 Hz, one pixel per clock cycle (25.175 MHz), in 4 shades of gray, dithered
-for 64 levels. The nearest 4 openings are drawn, 64 units apart in depth, each a circle of radius 512 units
-centered on a sum of two triangle waves of its index. A pixel shows the wall of the nearest opening it is
-outside of (or the black abyss beyond them all), shaded by that opening's depth.
+It draws a 640x480 picture at 60 Hz, one pixel per clock cycle (25.175 MHz). The nearest 4 openings are drawn,
+64 units apart in depth, each a circle of radius 512 units centered on a sum of two triangle waves of its index.
+A pixel shows the wall of the nearest opening it is outside of (or the black abyss beyond them all): white,
+light gray, dark gray and dark blue-gray, nearest first.
 
 To draw the circles without multipliers, it works in "ray space": the pixel at offset g from the center of the
 screen sees, at depth z, the lateral position g * z / 32 (relative to you). Along a line, that is a running sum,
@@ -34,6 +35,11 @@ nearest opening as it passes.
 
 Connect a VGA monitor (through the Tiny VGA Pmod) and the Gamepad Pmod, then release reset. Steer with the D-pad
 to keep the center of the screen within the openings. After a crash, press A or start to play again.
+
+Two pairs of input switches make it harder (0-3 each; read at reset and at each restart): `ui_in[1:0]`, how much
+the pit twists (consecutive openings shift up to ~420 units per axis, 0.8 of their radius, at 0, to ~560 at 3),
+and `ui_in[3:2]`, how fast you fall (an opening every 1.07 s at 0, to every 0.43 s at 3, before levels speed it
+up).
 
 In VGA Playground, enable the gamepad and use the arrow keys, and the `a` or `t` (start) key to restart.
 

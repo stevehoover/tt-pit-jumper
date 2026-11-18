@@ -28,10 +28,10 @@ project:
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
 pinout:
   # Inputs
-  ui[0]: ""
-  ui[1]: ""
-  ui[2]: ""
-  ui[3]: ""
+  ui[0]: "twist 0"
+  ui[1]: "twist 1"
+  ui[2]: "speed 0"
+  ui[3]: "speed 1"
   ui[4]: "gamepad latch"
   ui[5]: "gamepad clock"
   ui[6]: "gamepad data"

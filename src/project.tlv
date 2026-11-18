@@ -59,7 +59,7 @@
    //
    // The pit is a series of circular openings (rings), evenly spaced in depth, with meandering centers. The
    // nearest 4 are drawn in perspective: a pixel shows the wall of the nearest ring whose opening it is
-   // outside of (else the black abyss), shaded by that ring's depth (dithered between the 4 grays).
+   // outside of (else the black abyss), shaded by how near that ring is.
    //
    // Geometry, in "ray space": the pixel at offset g from the screen's center sees, at depth z, the lateral
    // position player + g * z / 32. It is within ring k's opening (radius 512, center a_k) if
@@ -74,12 +74,17 @@
    $step = $line_end && $Vpos == 10'd479;
    $restart = $reset || ($Crashed && (/gamepad[0]$start || /gamepad[0]$a));
    $play = $step && ! $Crashed;
+   // The switches, read at reset and each restart: ui_in[1:0], how much the pit twists; ui_in[3:2], how fast
+   // you fall.
+   $Twist[1:0] <= $restart ? *ui_in[1:0] : $RETAIN;
+   $Haste[1:0] <= $restart ? *ui_in[3:2] : $RETAIN;
 
    // ---- Falling ----
    // z0, the nearest ring's depth, in 1/16ths. As it passes 16, that ring passes the player ($pass), and
-   // the next becomes the nearest. Each level of 512 rings falls faster.
-   $speed[5:0] = 6'd12 + {1'b0, $Level, $Ring[8:6]};
-   $z_next[10:0] = $Depth - {5'b0, $speed};
+   // the next becomes the nearest: every 1.07 s, at 60 frames per second, with $Haste at 0. Each step of $Haste
+   // falls 1.5x as fast as that, and each 64 rings passed (an eighth of a level), 1/16 as fast again.
+   $speed[6:0] = 7'd16 + {2'b0, $Haste, 3'b0} + {2'b0, $Level, $Ring[8:6]};
+   $z_next[10:0] = $Depth - {4'b0, $speed};
    $pass = $z_next < 11'd256;
    $Depth[10:0] <= $restart ? 11'd1279 : ! $play ? $RETAIN : $pass ? $z_next + 11'd1024 : $z_next;
    $z0[15:0] = {9'b0, $Depth[10:4]};
@@ -92,45 +97,51 @@
    $Crashed <= $restart ? 1'b0 : $play && $pass && $CenterWall ? 1'b1 : $RETAIN;
 
    // ---- The player ----
-   // Position (x, y), in ray-space units (mod 2048), starting at the first ring's center. The D-pad sets the
-   // velocity: 12 units per frame (an opening's radius is 512).
+   // Position (x, y), in ray-space units (mod 4096), starting at the first ring's center. The D-pad sets the
+   // velocity: 5 units per frame, 300 per second (an opening's radius is 512), and 3 more for each step of
+   // $Haste, in proportion to the fall.
+   $step_size[3:0] = 4'd5 + {1'b0, $Haste, 1'b0} + {2'b0, $Haste};
    /axis[1:0]
       $neg = #axis ? /_top/gamepad[0]$up : /_top/gamepad[0]$left;
       $pos = #axis ? /_top/gamepad[0]$down : /_top/gamepad[0]$right;
-      $Pos[10:0] <= /_top$restart ? (#axis ? 11'd892 : 11'd256) :
+      $Pos[11:0] <= /_top$restart ? (#axis ? 12'd892 : 12'd256) :
                     ! /_top$play || $pos == $neg ? $RETAIN :
-                    $pos ? $Pos + 11'd12 : $Pos - 11'd12;
+                    $pos ? $Pos + {8'b0, /_top$step_size} : $Pos - {8'b0, /_top$step_size};
 
    // ---- Ring spans for the next line, computed during horizontal blanking ----
    // Pixels 640-647: for each ring k, two cycles: V_k and the opening's half-width (y), then its span (x).
    $span_cyc = $Hpos[9:3] == 7'b1010000;
    $k[1:0] = $Hpos[2:1];
    $x_cyc = $Hpos[0];
-   // Ring centers: sums of two triangle waves of the ring's index, n: 8 * tri(17n) + 4 * tri(5n + 64) for x,
-   // and the same with phases 80 and 128 later for y.
+   // Ring centers: sums of two triangle waves of the ring's index, n: 8 * tri(f1 * n) + 4 * tri(f2 * n + 64) for x,
+   // and the same with phases 80 and 128 later for y. The frequencies (in 256ths of a cycle per ring) are
+   // f1 = 45 + 4 * $Twist and f2 = 15 + 4 * $Twist, so consecutive centers differ by up to 8 * f1 + 4 * f2 units
+   // per axis (420-564; an opening's radius is 512).
    $n[7:0] = $Ring[7:0] + {6'b0, $k};
-   $ph1[7:0] = {$n[7:4] + $n[3:0] + ($x_cyc ? 4'd0 : 4'd5), $n[3:0]};
-   $ph2[7:0] = {$n[7:2] + $n[5:0] + ($x_cyc ? 6'd16 : 6'd48), $n[1:0]};
+   $twist_ph[7:0] = ($Twist[0] ? $n << 2 : 8'd0) + ($Twist[1] ? $n << 3 : 8'd0);  // 4 * $Twist * n
+   $n15[7:0] = ($n << 4) - $n;
+   $ph1[7:0] = ($n15 << 1) + $n15 + $twist_ph + ($x_cyc ? 8'd0 : 8'd80);  // n * 45 + ...
+   $ph2[7:0] = $n15 + $twist_ph + ($x_cyc ? 8'd64 : 8'd192);              // n * 15 + ...
    $tri1[6:0] = $ph1[7] ? ~$ph1[6:0] : $ph1[6:0];
    $tri2[6:0] = $ph2[7] ? ~$ph2[6:0] : $ph2[6:0];
    $center[10:0] = {{1'b0, $tri1, 1'b0} + {2'b0, $tri2}, 2'b0};
-   $b[10:0] = $center - ($x_cyc ? /axis[0]$Pos : /axis[1]$Pos);  // b_k.x or b_k.y (signed)
+   $b[11:0] = {1'b0, $center} - ($x_cyc ? /axis[0]$Pos : /axis[1]$Pos);  // b_k.x or b_k.y (signed)
    // V_k, from $Gy = g.y * z0 for the next line.
    $Gy[15:0] <= $reset || ($line_end && $Vpos == 10'd523) ? ($z0 << 4) - ($z0 << 8) :  // -240 * z0, for line 0
                 $line_end ? $Gy + $z0 : $RETAIN;
-   $gy[11:0] = $Vpos == 10'd524 ? -12'd240 : {2'b0, $Vpos} - 12'd239;  // g.y of the next line
-   $gy2k[11:0] = $k == 2'd0 ? 12'd0 :
+   $gy[12:0] = $Vpos == 10'd524 ? -13'd240 : {3'b0, $Vpos} - 13'd239;  // g.y of the next line
+   $gy2k[12:0] = $k == 2'd0 ? 13'd0 :
                  $k == 2'd1 ? $gy << 1 :
                  $k == 2'd2 ? $gy << 2 :
                               ($gy << 1) + ($gy << 2);
-   // (12 bits suffice: |V_k| < 3072 in visible lines, so it doesn't wrap into (-512, 512).)
-   $vy[11:0] = {$Gy[15], $Gy[15:5]} + $gy2k - {$b[10], $b};
+   // (13 bits suffice: |V_k| < 4096 in visible lines.)
+   $vy[12:0] = {{2{$Gy[15]}}, $Gy[15:5]} + $gy2k - {$b[11], $b};
    // The half-width, sqrt(512^2 - V_k^2) (from a table, for |V_k| / 4), or 0 if the line misses the opening.
-   $u[6:0] = $vy[8:2] ^ {7{$vy[11]}};  // |V_k| / 4 (about)
-   $miss = $vy[11:9] != {3{$vy[11]}};
+   $u[6:0] = $vy[8:2] ^ {7{$vy[12]}};  // |V_k| / 4 (about)
+   $miss = $vy[12:9] != {4{$vy[12]}};
    $Width[8:0] <= $span_cyc && ! $x_cyc ? ($miss ? 9'd0 : SQRT_TABLE[$u * 9 +: 9]) : $RETAIN;
-   $lo[12:0] = {{2{$b[10]}}, $b} - {4'b0, $Width};
-   $hi[12:0] = {{2{$b[10]}}, $b} + {4'b0, $Width};
+   $lo[12:0] = {$b[11], $b} - {4'b0, $Width};
+   $hi[12:0] = {$b[11], $b} + {4'b0, $Width};
    \SV_plus
       // floor(sqrt(512^2 - 1 - (4i + 3/2)^2)), 9 bits each, for i = 0..127.
       function automatic [128*9-1:0] sqrt_table();
@@ -154,37 +165,36 @@
    $s1[11:0] = {{2{$Ax[15]}}, $Ax[15:6]} + $gx;
    $s2[11:0] = {{4{$Ax[15]}}, $Ax[15:8]} + {$gx[11], $gx[11:1]};
    $s3[11:0] = $s2 + {{2{$gx[11]}}, $gx[11:2]};
+   // Ring 0's span, saturated to 12 bits (S_0 is within +/-800).
+   $lo0[11:0] = $lo[12] == $lo[11] ? $lo[11:0] : {$lo[12], {11{$lo[11]}}};
+   $hi0[11:0] = $hi[12] == $hi[11] ? $hi[11:0] : {$hi[12], {11{$hi[11]}}};
    /ring[3:0]
       $write = /_top$span_cyc && /_top$x_cyc && /_top$k == #ring;
       $Lo[11:0] <= ! $write ? $RETAIN :
-                   #ring == 0 ? /_top$lo[11:0] : #ring == 1 ? /_top$lo[12:1] : {{2{/_top$lo[12]}}, /_top$lo[12:3]};
+                   #ring == 0 ? /_top$lo0 : #ring == 1 ? /_top$lo[12:1] : {{2{/_top$lo[12]}}, /_top$lo[12:3]};
       $Hi[11:0] <= ! $write ? $RETAIN :
-                   #ring == 0 ? /_top$hi[11:0] : #ring == 1 ? /_top$hi[12:1] : {{2{/_top$hi[12]}}, /_top$hi[12:3]};
+                   #ring == 0 ? /_top$hi0 : #ring == 1 ? /_top$hi[12:1] : {{2{/_top$hi[12]}}, /_top$hi[12:3]};
       $s[11:0] = #ring == 0 ? {/_top$Ax[15], /_top$Ax[15:5]} : #ring == 1 ? /_top$s1 : #ring == 2 ? /_top$s2 : /_top$s3;
       // Lo < S < Hi (signed).
       $inside = {~$s[11], $s[10:0]} > {~$Lo[11], $Lo[10:0]} && {~$s[11], $s[10:0]} < {~$Hi[11], $Hi[10:0]};
    // The visible wall (4: the abyss).
    $wall[2:0] = ! /ring[0]$inside ? 3'd0 : ! /ring[1]$inside ? 3'd1 :
                 ! /ring[2]$inside ? 3'd2 : ! /ring[3]$inside ? 3'd3 : 3'd4;
-   // Its shade, lighter as it nears: (272 - z) / 4 for its depth, z, capped at 63; 4 grays (bits 5:4), each
-   // dithered toward the next (bits 3:0, against a 4x4 Bayer matrix).
-   $shade_base[6:0] = 7'd68 - {2'b0, $Depth[10:6]};
-   $shade_raw[6:0] = $shade_base - {$wall[1:0], 4'b0};
-   $shade[5:0] = $shade_raw[6] ? 6'd63 : $shade_raw[5:0];
-   $bayer[3:0] = {$Hpos[0] ^ $Vpos[0], $Vpos[0], $Hpos[1] ^ $Vpos[1], $Vpos[1]};
-   $gray[1:0] = $shade[5:4] + {1'b0, $shade[5:4] != 2'd3 && $shade[3:0] > $bayer};
-   // The depth meter, at x 16-31: the rings passed this level (1 pixel each, up to 480), colored by level.
-   $meter = $Hpos[9:4] == 6'd1;
+   // The depth meter, at x 0-15: the rings passed this level (1 pixel each, up to 480), colored by level.
+   $meter = $Hpos[9:4] == 6'd0;
    $fill_height[8:0] = $Ring - {4'b0, $Ring[8:4]};
    $filled = {1'b0, $Vpos} + {2'b0, $fill_height} >= 11'd480;
    $level_color[5:0] = $Level == 2'd0 ? 6'b00_01_11 :
                        $Level == 2'd1 ? 6'b00_11_01 :
                        $Level == 2'd2 ? 6'b11_11_00 : 6'b11_00_11;
-   // Colors (2 bits each of red, green and blue). The pit turns red after a crash.
+   // Colors (2 bits each of red, green and blue). The walls are white, light gray, dark gray and (to differ
+   // from the black abyss) dark blue-gray, nearest first. The pit turns red after a crash.
+   $gray[1:0] = 2'd3 - $wall[1:0];
    {*R, *G, *B} =
       $meter ? ($filled ? $level_color : 6'b10_10_10) :
       $wall == 3'd4 ? 6'b00_00_00 :
       $Crashed ? {$gray, 4'b0} :
+      $wall == 3'd3 ? 6'b00_00_01 :
       {$gray, $gray, $gray};
 
    /*
@@ -205,7 +215,7 @@
    // Instantiate the Virtual FPGA Lab.
    m5+board(/top, /fpga, 7, $, , my_design)
    // Label the switch inputs [0..7] (1..8 on the physical switch panel) (bottom-to-top).
-   m5+tt_input_labels_viz(['"UNUSED", "UNUSED", "UNUSED", "UNUSED", "UNUSED", "UNUSED", "UNUSED", "UNUSED"'])
+   m5+tt_input_labels_viz(['"twist[0]", "twist[1]", "speed[0]", "speed[1]", "pad latch", "pad clock", "pad data", "UNUSED"'])
 
 \SV
 
